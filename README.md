@@ -66,6 +66,27 @@ swift run CliproxyStatusBar
 - 一直显示 `Error`：先在终端用 `curl` 验证 `/v0/management/usage` 是否可达。
 - 没有趋势/排行：CLIProxyAPI 当前流量太少或 usage 统计未启用。
 
+## GitHub 自动构建
+
+仓库已包含 GitHub Actions 工作流：
+
+- 文件：`.github/workflows/build.yml`
+- 触发条件：
+  - push 到 `main`
+  - pull request
+  - 手动触发（`workflow_dispatch`）
+- 构建命令：
+  - `swift package resolve`
+  - `swift build -c release --product CliproxyStatusBar`
+- 构建产物：
+  - 自动上传 `.build/release/CliproxyStatusBar` 到 Actions Artifacts
+
+首次启用步骤：
+
+1. 把代码推送到 GitHub。
+2. 打开仓库的 `Actions` 页面。
+3. 允许并运行 `Build macOS App` 工作流（如果是新仓库首次运行，GitHub 可能需要你确认启用）。
+
 ## License
 
 MIT
