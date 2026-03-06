@@ -66,26 +66,47 @@ swift run CliproxyStatusBar
 - 一直显示 `Error`：先在终端用 `curl` 验证 `/v0/management/usage` 是否可达。
 - 没有趋势/排行：CLIProxyAPI 当前流量太少或 usage 统计未启用。
 
-## GitHub 自动构建
+## 本地打包（unsigned）
+
+生成可分发 `.app` 和 `.zip`：
+
+```bash
+VERSION=v0.1.0 ./scripts/build-app.sh
+VERSION=v0.1.0 ./scripts/package-zip.sh
+```
+
+产物位于 `dist/`：
+
+- `dist/CliproxyStatusBar.app`
+- `dist/CliproxyStatusBar-v0.1.0-macOS.zip`
+
+## GitHub 自动构建与发布
 
 仓库已包含 GitHub Actions 工作流：
 
-- 文件：`.github/workflows/build.yml`
-- 触发条件：
-  - push 到 `main`
-  - pull request
-  - 手动触发（`workflow_dispatch`）
-- 构建命令：
-  - `swift package resolve`
-  - `swift build -c release --product CliproxyStatusBar`
-- 构建产物：
-  - 自动上传 `.build/release/CliproxyStatusBar` 到 Actions Artifacts
+- `.github/workflows/build.yml`
+  - 触发：push 到 `main` / pull request / 手动触发
+  - 行为：构建并上传 `dist/*.zip`（内含 `.app`）
+- `.github/workflows/release.yml`
+  - 触发：push 版本标签（如 `v1.0.0`）
+  - 行为：构建 `.app`、打包 `.zip`，并创建或更新同名 GitHub Release，自动附加 `dist/*.zip`
 
 首次启用步骤：
 
 1. 把代码推送到 GitHub。
 2. 打开仓库的 `Actions` 页面。
-3. 允许并运行 `Build macOS App` 工作流（如果是新仓库首次运行，GitHub 可能需要你确认启用）。
+3. 推送版本标签，例如：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+## 下载与安装
+
+1. 在 GitHub 的 `Releases` 页面下载 `CliproxyStatusBar-<version>-macOS.zip`。
+2. 解压得到 `CliproxyStatusBar.app`，拖到 `Applications`。
+3. 首次启动若被 Gatekeeper 拦截：右键 App 选择 `Open`（当前版本未签名、未公证）。
 
 ## License
 

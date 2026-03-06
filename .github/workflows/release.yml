@@ -1,14 +1,15 @@
-name: Build macOS App
+name: Release macOS App
 
 on:
   push:
-    branches:
-      - main
-  pull_request:
-  workflow_dispatch:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
 
 jobs:
-  build:
+  release:
     runs-on: macos-latest
     env:
       SWIFTPM_CONFIG_PATH: ${{ github.workspace }}/.swift-cache/.swiftpm
@@ -38,15 +39,22 @@ jobs:
           fi
 
       - name: Build .app Bundle
-        run: VERSION=dev ./scripts/build-app.sh
+        run: VERSION=${{ github.ref_name }} BUILD_NUMBER=${{ github.run_number }} ./scripts/build-app.sh
 
       - name: Package .zip Artifact
-        run: VERSION=dev ./scripts/package-zip.sh
+        run: VERSION=${{ github.ref_name }} ./scripts/package-zip.sh
 
-      - name: Upload Build Artifact
+      - name: Upload Workflow Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CliproxyStatusBar-macos
-          path: |
-            dist/CliproxyStatusBar.app
-            dist/*.zip
+          name: CliproxyStatusBar-${{ github.ref_name }}
+          path: dist/*.zip
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          overwrite_files: true
+          files: dist/*.zip
