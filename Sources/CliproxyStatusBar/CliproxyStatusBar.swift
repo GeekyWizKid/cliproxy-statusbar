@@ -795,7 +795,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         button.imagePosition = .imageLeading
         button.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
         button.target = self
-        button.action = #selector(togglePopover(_:))
+        button.action = #selector(handleStatusItemClick(_:))
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         button.title = " --"
         button.toolTip = model.t("CLIProxyAPI 使用监控", "CLIProxyAPI Usage Monitor")
     }
@@ -848,17 +849,91 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         button.toolTip = model.t("等待数据", "Waiting for data")
     }
 
+    @objc private func handleStatusItemClick(_ sender: Any?) {
+        guard let button = statusItem.button else {
+            return
+        }
+
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            showContextMenu(relativeTo: button)
+            return
+        }
+
+        togglePopover(sender)
+    }
+
     @objc private func togglePopover(_ sender: Any?) {
         if popover.isShown {
             closePopover(sender)
             return
         }
+
+        showPopover()
+    }
+
+    private func showPopover() {
         guard let button = statusItem.button else {
             return
         }
+
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         startPopoverMonitors()
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func showContextMenu(relativeTo button: NSStatusBarButton) {
+        if popover.isShown {
+            closePopover(nil)
+        }
+
+        let menu = NSMenu()
+        let refresh = NSMenuItem(
+            title: model.t("刷新", "Refresh"),
+            action: #selector(handleRefreshMenuItem(_:)),
+            keyEquivalent: "r"
+        )
+        refresh.target = self
+
+        let settings = NSMenuItem(
+            title: model.t("设置", "Settings"),
+            action: #selector(handleSettingsMenuItem(_:)),
+            keyEquivalent: ","
+        )
+        settings.target = self
+
+        let quit = NSMenuItem(
+            title: model.t("退出", "Quit"),
+            action: #selector(handleQuitMenuItem(_:)),
+            keyEquivalent: "q"
+        )
+        quit.target = self
+
+        menu.addItem(refresh)
+        menu.addItem(settings)
+        menu.addItem(.separator())
+        menu.addItem(quit)
+
+        if let event = NSApp.currentEvent {
+            NSMenu.popUpContextMenu(menu, with: event, for: button)
+            return
+        }
+
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
+    }
+
+    @objc private func handleRefreshMenuItem(_ sender: Any?) {
+        model.refreshNow(force: true)
+    }
+
+    @objc private func handleSettingsMenuItem(_ sender: Any?) {
+        if !popover.isShown {
+            showPopover()
+        }
+        model.isSettingsPresented = true
+    }
+
+    @objc private func handleQuitMenuItem(_ sender: Any?) {
+        NSApp.terminate(nil)
     }
 
     private func closePopover(_ sender: Any?) {
@@ -957,8 +1032,6 @@ struct DashboardView: View {
                     )
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-
-                actionsCard
             }
         }
         .padding(14)
@@ -1042,52 +1115,6 @@ struct DashboardView: View {
         }
     }
 
-    private var actionsCard: some View {
-        SurfaceCard {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("\(model.t("刷新间隔", "Refresh")): \(Int(model.config.refreshIntervalSeconds)) \(model.t("秒", "s"))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    if let summary = model.summary {
-                        Text("\(model.t("失败率", "Failure")) \(String(format: "%.2f%%", summary.failureRate * 100))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                HStack(spacing: 8) {
-                    Button {
-                        model.refreshNow(force: true)
-                    } label: {
-                        Label(model.t("刷新", "Refresh"), systemImage: "arrow.clockwise")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-
-                    Button {
-                        model.isSettingsPresented = true
-                    } label: {
-                        Label(model.t("设置", "Settings"), systemImage: "gearshape")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    Button(role: .destructive) {
-                        NSApp.terminate(nil)
-                    } label: {
-                        Label(model.t("退出", "Quit"), systemImage: "xmark")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-            }
-        }
-    }
 }
 
 private struct SurfaceCard<Content: View>: View {

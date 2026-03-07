@@ -71,14 +71,14 @@ swift run CliproxyStatusBar
 生成可分发 `.app` 和 `.zip`：
 
 ```bash
-VERSION=v0.1.0 ./scripts/build-app.sh
-VERSION=v0.1.0 ./scripts/package-zip.sh
+VERSION=v0.2.0 ./scripts/build-app.sh
+VERSION=v0.2.0 ./scripts/package-zip.sh
 ```
 
 产物位于 `dist/`：
 
 - `dist/CliproxyStatusBar.app`
-- `dist/CliproxyStatusBar-v0.1.0-macOS.zip`
+- `dist/CliproxyStatusBar-v0.2.0-macOS.zip`
 
 ## GitHub 自动构建与发布
 
@@ -98,8 +98,8 @@ VERSION=v0.1.0 ./scripts/package-zip.sh
 3. 推送版本标签，例如：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 ## 下载与安装
