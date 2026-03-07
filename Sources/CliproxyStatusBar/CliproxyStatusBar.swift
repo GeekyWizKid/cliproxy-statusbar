@@ -473,6 +473,7 @@ struct UsageSummary: Sendable {
 
 enum UsageClientError: Error, Sendable {
     case invalidURL(String)
+    case appTransportSecurityBlocked(String)
     case httpError(status: Int, body: String)
     case emptyData
     case decodeFailed(String)
@@ -483,6 +484,8 @@ extension UsageClientError {
         switch self {
         case .invalidURL(let value):
             return "\(t("无效地址", "Invalid URL")): \(value)"
+        case .appTransportSecurityBlocked(let value):
+            return "\(t("连接被系统安全策略拦截，请使用 HTTPS，或运行带 ATS 配置的 .app 包", "Connection blocked by App Transport Security. Use HTTPS, or run the packaged .app with ATS configuration")): \(value)"
         case .httpError(let status, let body):
             if body.isEmpty {
                 return "\(t("管理接口返回 HTTP", "Management API returned HTTP")) \(status)"
@@ -511,6 +514,10 @@ actor UsageClient {
             throw UsageClientError.invalidURL(config.baseURL)
         }
 
+        if url.scheme?.lowercased() == "http", !allowsInsecureHTTP(for: url) {
+            throw UsageClientError.appTransportSecurityBlocked(url.absoluteString)
+        }
+
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -518,7 +525,14 @@ actor UsageClient {
             request.setValue("Bearer \(config.managementKey)", forHTTPHeaderField: "Authorization")
         }
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch let urlError as URLError where urlError.code == .appTransportSecurityRequiresSecureConnection {
+            throw UsageClientError.appTransportSecurityBlocked(url.absoluteString)
+        } catch {
+            throw error
+        }
 
         guard let http = response as? HTTPURLResponse else {
             throw UsageClientError.decodeFailed("Invalid response format")
@@ -551,6 +565,31 @@ actor UsageClient {
 
         let normalized = trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
         return URL(string: "\(normalized)/v0/management/usage")
+    }
+
+    private func allowsInsecureHTTP(for url: URL) -> Bool {
+        guard let ats = Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any] else {
+            return false
+        }
+
+        if let allows = ats["NSAllowsArbitraryLoads"] as? Bool, allows {
+            return true
+        }
+
+        if let host = url.host?.lowercased(),
+           let exceptions = ats["NSExceptionDomains"] as? [String: Any],
+           let domainConfig = exceptions[host] as? [String: Any],
+           let allows = domainConfig["NSExceptionAllowsInsecureHTTPLoads"] as? Bool,
+           allows {
+            return true
+        }
+
+        guard let allowsLocal = ats["NSAllowsLocalNetworking"] as? Bool, allowsLocal else {
+            return false
+        }
+
+        let host = url.host?.lowercased() ?? ""
+        return host == "localhost" || host == "127.0.0.1" || host == "::1" || host.hasSuffix(".local")
     }
 }
 
