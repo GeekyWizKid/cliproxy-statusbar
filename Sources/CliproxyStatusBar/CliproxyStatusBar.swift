@@ -562,7 +562,6 @@ final class DashboardModel: NSObject, ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var isLoading = false
     @Published private(set) var lastUpdatedAt: Date?
-    @Published var isSettingsPresented = false
     @Published var selectedTimeRange: UsageTimeRange = .allTime {
         didSet {
             rebuildSelectedSummary()
@@ -760,6 +759,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let popover = NSPopover()
     private let model = DashboardModel()
+    private var settingsWindow: NSWindow?
     private var globalClickMonitor: Any?
     private var localClickMonitor: Any?
     private var appDeactivationObserver: NSObjectProtocol?
@@ -926,10 +926,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     @objc private func handleSettingsMenuItem(_ sender: Any?) {
-        if !popover.isShown {
-            showPopover()
-        }
-        model.isSettingsPresented = true
+        showSettingsWindow()
     }
 
     @objc private func handleQuitMenuItem(_ sender: Any?) {
@@ -937,7 +934,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func closePopover(_ sender: Any?) {
-        model.isSettingsPresented = false
         guard popover.isShown else {
             stopPopoverMonitors()
             return
@@ -987,8 +983,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     func popoverDidClose(_ notification: Notification) {
-        model.isSettingsPresented = false
         stopPopoverMonitors()
+    }
+
+    private func showSettingsWindow() {
+        let window: NSWindow
+        if let existing = settingsWindow {
+            window = existing
+        } else {
+            let created = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 420, height: 340),
+                styleMask: [.titled, .closable],
+                backing: .buffered,
+                defer: false
+            )
+            created.isReleasedWhenClosed = false
+            created.center()
+            settingsWindow = created
+            window = created
+        }
+
+        window.title = model.t("偏好设置", "Preferences")
+        window.contentViewController = NSHostingController(
+            rootView: SettingsView(
+                model: model,
+                onClose: { [weak window] in
+                    window?.close()
+                }
+            )
+        )
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
     }
 }
 
@@ -1037,9 +1062,6 @@ struct DashboardView: View {
         .padding(14)
         .frame(width: 420, height: 620)
         .background(.regularMaterial)
-        .sheet(isPresented: $model.isSettingsPresented) {
-            SettingsView(model: model)
-        }
     }
 
     private var headerCard: some View {
@@ -1291,7 +1313,7 @@ private struct RankedRow: View {
 
 struct SettingsView: View {
     @ObservedObject var model: DashboardModel
-    @Environment(\.dismiss) private var dismiss
+    let onClose: () -> Void
 
     @State private var baseURL: String
     @State private var managementKey: String
@@ -1299,8 +1321,9 @@ struct SettingsView: View {
     @State private var language: AppLanguage
     @State private var error: String?
 
-    init(model: DashboardModel) {
+    init(model: DashboardModel, onClose: @escaping () -> Void) {
         self.model = model
+        self.onClose = onClose
         _baseURL = State(initialValue: model.config.baseURL)
         _managementKey = State(initialValue: model.config.managementKey)
         _refreshSeconds = State(initialValue: String(Int(model.config.refreshIntervalSeconds)))
@@ -1342,7 +1365,7 @@ struct SettingsView: View {
 
             HStack {
                 Button(model.t("取消", "Cancel")) {
-                    dismiss()
+                    onClose()
                 }
                 .keyboardShortcut(.cancelAction)
                 .buttonStyle(.bordered)
@@ -1369,7 +1392,7 @@ struct SettingsView: View {
             error = message
             return
         }
-        dismiss()
+        onClose()
     }
 
     private func syncFromModel() {
