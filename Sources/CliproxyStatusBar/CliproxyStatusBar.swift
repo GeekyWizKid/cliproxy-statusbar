@@ -862,6 +862,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func closePopover(_ sender: Any?) {
+        model.isSettingsPresented = false
         guard popover.isShown else {
             stopPopoverMonitors()
             return
@@ -911,6 +912,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     func popoverDidClose(_ notification: Notification) {
+        model.isSettingsPresented = false
         stopPopoverMonitors()
     }
 }
