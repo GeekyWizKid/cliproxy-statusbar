@@ -1,5 +1,6 @@
 import AppKit
 import Charts
+import Darwin
 import Foundation
 import SwiftUI
 
@@ -473,7 +474,6 @@ struct UsageSummary: Sendable {
 
 enum UsageClientError: Error, Sendable {
     case invalidURL(String)
-    case appTransportSecurityBlocked(String)
     case httpError(status: Int, body: String)
     case emptyData
     case decodeFailed(String)
@@ -484,8 +484,6 @@ extension UsageClientError {
         switch self {
         case .invalidURL(let value):
             return "\(t("无效地址", "Invalid URL")): \(value)"
-        case .appTransportSecurityBlocked(let value):
-            return "\(t("连接被系统安全策略拦截，请使用 HTTPS，或运行带 ATS 配置的 .app 包", "Connection blocked by App Transport Security. Use HTTPS, or run the packaged .app with ATS configuration")): \(value)"
         case .httpError(let status, let body):
             if body.isEmpty {
                 return "\(t("管理接口返回 HTTP", "Management API returned HTTP")) \(status)"
@@ -514,10 +512,6 @@ actor UsageClient {
             throw UsageClientError.invalidURL(config.baseURL)
         }
 
-        if url.scheme?.lowercased() == "http", !allowsInsecureHTTP(for: url) {
-            throw UsageClientError.appTransportSecurityBlocked(url.absoluteString)
-        }
-
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -525,22 +519,29 @@ actor UsageClient {
             request.setValue("Bearer \(config.managementKey)", forHTTPHeaderField: "Authorization")
         }
 
-        let (data, response): (Data, URLResponse)
+        let data: Data
+        let statusCode: Int
         do {
-            (data, response) = try await session.data(for: request)
+            let result = try await session.data(for: request)
+            guard let http = result.1 as? HTTPURLResponse else {
+                throw UsageClientError.decodeFailed("Invalid response format")
+            }
+            data = result.0
+            statusCode = http.statusCode
         } catch let urlError as URLError where urlError.code == .appTransportSecurityRequiresSecureConnection {
-            throw UsageClientError.appTransportSecurityBlocked(url.absoluteString)
+            guard url.scheme?.lowercased() == "http" else {
+                throw urlError
+            }
+            let result = try await fetchUsageOverPlainHTTP(url: url, managementKey: config.managementKey)
+            data = result.data
+            statusCode = result.statusCode
         } catch {
             throw error
         }
 
-        guard let http = response as? HTTPURLResponse else {
-            throw UsageClientError.decodeFailed("Invalid response format")
-        }
-
-        if http.statusCode >= 400 {
+        if statusCode >= 400 {
             let body = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            throw UsageClientError.httpError(status: http.statusCode, body: body)
+            throw UsageClientError.httpError(status: statusCode, body: body)
         }
 
         guard !data.isEmpty else {
@@ -567,29 +568,185 @@ actor UsageClient {
         return URL(string: "\(normalized)/v0/management/usage")
     }
 
-    private func allowsInsecureHTTP(for url: URL) -> Bool {
-        guard let ats = Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any] else {
-            return false
+    private func fetchUsageOverPlainHTTP(url: URL, managementKey: String) async throws -> (statusCode: Int, data: Data) {
+        try await Task.detached(priority: .userInitiated) {
+            try UsageClient.fetchUsageOverPlainHTTPSync(url: url, managementKey: managementKey)
+        }.value
+    }
+
+    private static func fetchUsageOverPlainHTTPSync(url: URL, managementKey: String) throws -> (statusCode: Int, data: Data) {
+        guard let host = url.host else {
+            throw UsageClientError.invalidURL(url.absoluteString)
+        }
+        let portString = String(url.port ?? 80)
+
+        var hints = addrinfo(
+            ai_flags: AI_ADDRCONFIG,
+            ai_family: AF_UNSPEC,
+            ai_socktype: SOCK_STREAM,
+            ai_protocol: IPPROTO_TCP,
+            ai_addrlen: 0,
+            ai_canonname: nil,
+            ai_addr: nil,
+            ai_next: nil
+        )
+
+        var resultList: UnsafeMutablePointer<addrinfo>?
+        let addressLookup = getaddrinfo(host, portString, &hints, &resultList)
+        guard addressLookup == 0, let first = resultList else {
+            let reason = String(cString: gai_strerror(addressLookup))
+            throw UsageClientError.decodeFailed("Fallback HTTP DNS failed: \(reason)")
+        }
+        defer { freeaddrinfo(first) }
+
+        var socketFD: Int32 = -1
+        var cursor: UnsafeMutablePointer<addrinfo>? = first
+        while let info = cursor {
+            socketFD = Darwin.socket(info.pointee.ai_family, info.pointee.ai_socktype, info.pointee.ai_protocol)
+            if socketFD >= 0 {
+                let connected = Darwin.connect(socketFD, info.pointee.ai_addr, info.pointee.ai_addrlen)
+                if connected == 0 {
+                    break
+                }
+                Darwin.close(socketFD)
+                socketFD = -1
+            }
+            cursor = info.pointee.ai_next
         }
 
-        if let allows = ats["NSAllowsArbitraryLoads"] as? Bool, allows {
-            return true
+        guard socketFD >= 0 else {
+            let reason = String(cString: strerror(errno))
+            throw UsageClientError.decodeFailed("Fallback HTTP connect failed: \(reason)")
+        }
+        defer { Darwin.close(socketFD) }
+
+        let path = (url.path.isEmpty ? "/" : url.path) + (url.query.map { "?\($0)" } ?? "")
+        var requestLines = [
+            "GET \(path) HTTP/1.1",
+            "Host: \(host)\(url.port.map { ":\($0)" } ?? "")",
+            "Accept: application/json",
+            "Connection: close"
+        ]
+        if !managementKey.isEmpty {
+            requestLines.append("Authorization: Bearer \(managementKey)")
+        }
+        requestLines.append("")
+        requestLines.append("")
+
+        guard let requestData = requestLines.joined(separator: "\r\n").data(using: .utf8) else {
+            throw UsageClientError.decodeFailed("Failed to encode fallback HTTP request")
         }
 
-        if let host = url.host?.lowercased(),
-           let exceptions = ats["NSExceptionDomains"] as? [String: Any],
-           let domainConfig = exceptions[host] as? [String: Any],
-           let allows = domainConfig["NSExceptionAllowsInsecureHTTPLoads"] as? Bool,
-           allows {
-            return true
+        try requestData.withUnsafeBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else { return }
+            var sent = 0
+            while sent < rawBuffer.count {
+                let wrote = Darwin.send(socketFD, baseAddress.advanced(by: sent), rawBuffer.count - sent, 0)
+                if wrote <= 0 {
+                    let reason = String(cString: strerror(errno))
+                    throw UsageClientError.decodeFailed("Fallback HTTP send failed: \(reason)")
+                }
+                sent += wrote
+            }
         }
 
-        guard let allowsLocal = ats["NSAllowsLocalNetworking"] as? Bool, allowsLocal else {
-            return false
+        var responseData = Data()
+        var chunk = [UInt8](repeating: 0, count: 64 * 1024)
+        while true {
+            let readCount = Darwin.recv(socketFD, &chunk, chunk.count, 0)
+            if readCount > 0 {
+                responseData.append(chunk, count: readCount)
+                continue
+            }
+            if readCount == 0 {
+                break
+            }
+            if errno == EINTR {
+                continue
+            }
+            let reason = String(cString: strerror(errno))
+            throw UsageClientError.decodeFailed("Fallback HTTP receive failed: \(reason)")
         }
 
-        let host = url.host?.lowercased() ?? ""
-        return host == "localhost" || host == "127.0.0.1" || host == "::1" || host.hasSuffix(".local")
+        return try parseHTTPResponse(responseData)
+    }
+
+    private static func parseHTTPResponse(_ raw: Data) throws -> (statusCode: Int, data: Data) {
+        guard let headerRange = raw.range(of: Data("\r\n\r\n".utf8)) else {
+            throw UsageClientError.decodeFailed("Fallback HTTP response missing headers")
+        }
+
+        let headerData = raw[..<headerRange.lowerBound]
+        let bodyStart = headerRange.upperBound
+        guard let headerText = String(data: headerData, encoding: .utf8) else {
+            throw UsageClientError.decodeFailed("Fallback HTTP headers are not valid UTF-8")
+        }
+
+        let lines = headerText.components(separatedBy: "\r\n")
+        guard let statusLine = lines.first, !statusLine.isEmpty else {
+            throw UsageClientError.decodeFailed("Fallback HTTP missing status line")
+        }
+
+        let statusParts = statusLine.split(separator: " ")
+        guard statusParts.count >= 2, let statusCode = Int(statusParts[1]) else {
+            throw UsageClientError.decodeFailed("Fallback HTTP status line invalid: \(statusLine)")
+        }
+
+        var headers: [String: String] = [:]
+        for line in lines.dropFirst() where !line.isEmpty {
+            let pair = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard pair.count == 2 else { continue }
+            headers[String(pair[0]).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()] =
+                String(pair[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        var body = Data(raw[bodyStart...])
+        if headers["transfer-encoding"]?.lowercased().contains("chunked") == true {
+            body = try decodeChunkedBody(body)
+        } else if let lengthValue = headers["content-length"], let expectedLength = Int(lengthValue), expectedLength >= 0 {
+            if body.count < expectedLength {
+                throw UsageClientError.decodeFailed("Fallback HTTP body truncated")
+            }
+            body = body.prefix(expectedLength)
+        }
+
+        return (statusCode: statusCode, data: body)
+    }
+
+    private static func decodeChunkedBody(_ body: Data) throws -> Data {
+        var result = Data()
+        var index = body.startIndex
+
+        while index < body.endIndex {
+            guard let sizeLineEnd = body[index...].range(of: Data("\r\n".utf8))?.lowerBound else {
+                throw UsageClientError.decodeFailed("Invalid chunked response: missing chunk size terminator")
+            }
+            let sizeLineData = body[index..<sizeLineEnd]
+            guard let sizeLine = String(data: sizeLineData, encoding: .utf8)?
+                .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true).first,
+                let chunkSize = Int(sizeLine.trimmingCharacters(in: .whitespacesAndNewlines), radix: 16) else {
+                throw UsageClientError.decodeFailed("Invalid chunked response: bad chunk size")
+            }
+
+            index = body.index(sizeLineEnd, offsetBy: 2)
+            if chunkSize == 0 {
+                break
+            }
+
+            guard let chunkEnd = body.index(index, offsetBy: chunkSize, limitedBy: body.endIndex) else {
+                throw UsageClientError.decodeFailed("Invalid chunked response: truncated chunk")
+            }
+            result.append(body[index..<chunkEnd])
+
+            guard let lineEnd = body.index(chunkEnd, offsetBy: 2, limitedBy: body.endIndex),
+                  body[chunkEnd] == UInt8(ascii: "\r"),
+                  body[body.index(after: chunkEnd)] == UInt8(ascii: "\n") else {
+                throw UsageClientError.decodeFailed("Invalid chunked response: missing chunk terminator")
+            }
+            index = lineEnd
+        }
+
+        return result
     }
 }
 
