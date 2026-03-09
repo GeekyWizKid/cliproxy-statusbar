@@ -89,7 +89,7 @@ VERSION=v0.2.0 ./scripts/package-zip.sh
   - 行为：构建并上传 `dist/*.zip`（内含 `.app`）
 - `.github/workflows/release.yml`
   - 触发：push 版本标签（如 `v1.0.0`）
-  - 行为：构建 `.app`、打包 `.zip`，并创建或更新同名 GitHub Release，自动附加 `dist/*.zip`
+  - 行为：构建 `.app`、打包 `.zip`，并创建或更新同名 GitHub Release，自动附加 `dist/CliproxyStatusBar.app` 与 `dist/*.zip`
 
 首次启用步骤：
 

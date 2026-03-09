@@ -48,7 +48,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: CliproxyStatusBar-${{ github.ref_name }}
-          path: dist/*.zip
+          path: |
+            dist/CliproxyStatusBar.app
+            dist/*.zip
 
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
@@ -57,4 +59,6 @@ jobs:
           name: ${{ github.ref_name }}
           generate_release_notes: true
           overwrite_files: true
-          files: dist/*.zip
+          files: |
+            dist/CliproxyStatusBar.app
+            dist/*.zip
